@@ -1,0 +1,740 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Galileo GDS Simulator</title>
+    <style>
+        body {
+            background-color: #003d7a;
+            color: white;
+            font-family: 'Courier New', monospace;
+            margin: 0;
+            padding: 20px;
+            font-size: 16px;
+            line-height: 1.4;
+        }
+        #terminal-container {
+            max-width: 600px;
+            margin: 0 auto;
+        }
+        #terminal-header {
+            text-align: center;
+            margin-bottom: 2px;
+            padding-bottom: 10px;
+        }
+        #terminal {
+            background-color: #003d7a;
+            padding: 15px;
+            min-height: 50px;
+            white-space: pre-wrap;
+            overflow-y: auto;
+            max-width: 80ch;
+            margin: 0 auto;
+        }
+        #input-line {
+            display: flex;
+            align-items: center;
+            margin-top: 2px;
+        }
+        #prompt {
+            color: white;
+            margin-right: 5px;
+        }
+        #command-input {
+            background: transparent;
+            border: none;
+            color: white;
+            font-family: 'Courier New', monospace;
+            font-size: 16px;
+            outline: none;
+            flex: 1;
+        }
+    </style>
+</head>
+<body>
+    <div id="terminal-container">
+        <div id="terminal-header">Galileo GDS Simulator</div>
+        <div id="terminal"></div>
+        <div id="input-line">
+            <span id="prompt">IGNORED></span>
+            <input type="text" id="command-input" autocomplete="off" autofocus>
+        </div>
+    </div>
+
+    <script>
+        let pnrSegments = [];
+        let pnrPassengers = [];
+        let quotedFare = null;
+        let pnrCreated = null;
+        let pnrLocator = null;
+        let lastRoute = '';
+        let lastDate = '';
+        let lastFlightDetails = [];
+        let notepadEntries = [];
+        let ticketingDeadline = null;
+        let ticketsIssued = [];
+
+        const terminal = document.getElementById('terminal');
+        const input = document.getElementById('command-input');
+
+        const airports = {
+            'LHR': 'LONDON HEATHROW',
+            'JFK': 'NEW YORK JFK',
+            'BKK': 'BANGKOK SUVARNABHUMI',
+            'TPE': 'TAIPEI TAOYUAN'
+        };
+
+        const carriers = {
+            'LHRJFK': ['BA', 'VS'],
+            'JFKLHR': ['BA', 'VS'],
+            'LHRBKK': ['BA', 'TG', 'BR', 'QR'],
+            'BKKLHR': ['BA', 'TG', 'BR', 'QR'],
+            'LHRTPE': ['BR'],
+            'TPELHR': ['BR'],
+            'BKKTPE': ['BR'],
+            'TPEBKK': ['BR'],
+            'JFKTPE': ['BR'],
+            'TPEJFK': ['BR']
+        };
+
+        const airlines = {
+            'BA': 'BRITISH AIRWAYS',
+            'VS': 'VIRGIN ATLANTIC',
+            'TG': 'THAI AIRWAYS',
+            'BR': 'EVA AIR',
+            'QR': 'QATAR AIRWAYS'
+        };
+
+        const fares = {
+            'LHRBKK': {
+                'BR': [
+                    {class: 'J', base: 5200, total: 5200, currency: 'GBP', description: 'Royal Laurel Business', oneway: 3467},
+                    {class: 'I', base: 2100, total: 2100, currency: 'GBP', description: 'Premium Laurel Business', oneway: 1400},
+                    {class: 'W', base: 950, total: 950, currency: 'GBP', description: 'Premium Economy', oneway: 633},
+                    {class: 'Y', base: 680, total: 680, currency: 'GBP', description: 'Economy', oneway: 453},
+                    {class: 'L', base: 510, total: 510, currency: 'GBP', description: 'Economy Saver', oneway: 340},
+                    {class: 'Q', base: 410, total: 410, currency: 'GBP', description: 'Economy Special', oneway: 273},
+                    {class: 'O', base: 380, total: 380, currency: 'GBP', description: 'Economy Super Saver', oneway: 253}
+                ],
+                'QR': [
+                    {class: 'J', base: 4200, total: 4200, currency: 'GBP', description: 'Qsuite Business', oneway: 2800},
+                    {class: 'C', base: 3800, total: 3800, currency: 'GBP', description: 'Business', oneway: 2533},
+                    {class: 'W', base: 1200, total: 1200, currency: 'GBP', description: 'Premium Economy', oneway: 800},
+                    {class: 'Y', base: 590, total: 590, currency: 'GBP', description: 'Economy', oneway: 420},
+                    {class: 'B', base: 515, total: 515, currency: 'GBP', description: 'Economy Flexible', oneway: 400},
+                    {class: 'M', base: 372, total: 372, currency: 'GBP', description: 'Economy Special', oneway: 372}
+                ]
+            }
+        };
+
+        function randomString(length) {
+            const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+            let result = '';
+            for (let i = 0; i < length; i++) {
+                result += chars.charAt(Math.floor(Math.random() * chars.length));
+            }
+            return result;
+        }
+
+        function getBRTime(route) {
+            if (route === 'LHRBKK') return '2130';
+            if (route === 'BKKLHR') return '1915';
+            return '1200';
+        }
+
+        function getDayOfWeek(dateStr) {
+            if (dateStr.length !== 5) return 'XX';
+            const day = parseInt(dateStr.substring(0, 2));
+            const monthStr = dateStr.substring(2, 5).toUpperCase();
+            const months = {
+                'JAN': 0, 'FEB': 1, 'MAR': 2, 'APR': 3, 'MAY': 4, 'JUN': 5,
+                'JUL': 6, 'AUG': 7, 'SEP': 8, 'OCT': 9, 'NOV': 10, 'DEC': 11
+            };
+            const month = months[monthStr];
+            if (month === undefined || day < 1 || day > 31) return 'XX';
+            const date = new Date(2025, month, day);
+            const days = ['SU', 'MO', 'TU', 'WE', 'TH', 'FR', 'SA'];
+            return days[date.getDay()];
+        }
+
+        function formatDate(dateStr) {
+            return dateStr.substring(0, 2) + dateStr.substring(2, 5);
+        }
+
+        function updateDisplay(text) {
+            terminal.innerHTML = text;
+        }
+
+        window.selectedSeatsList = [];
+        
+        window.selectSeat = function(seatNumber) {
+            const seatEl = document.getElementById('seat_' + seatNumber);
+            const isSelected = window.selectedSeatsList.includes(seatNumber);
+            
+            if (isSelected) {
+                seatEl.style.background = '#4CAF50';
+                window.selectedSeatsList = window.selectedSeatsList.filter(s => s !== seatNumber);
+            } else {
+                seatEl.style.background = '#2196F3';
+                window.selectedSeatsList.push(seatNumber);
+            }
+            
+            const listEl = document.getElementById('selectedSeats');
+            if (listEl) listEl.textContent = window.selectedSeatsList.length ? window.selectedSeatsList.join(', ') : 'None';
+        };
+        
+        window.confirmSeats = function() {
+            if (window.selectedSeatsList.length) {
+                const cmdInput = document.getElementById('command-input');
+                cmdInput.value = 'SEATS:' + window.selectedSeatsList.join(',');
+                cmdInput.dispatchEvent(new KeyboardEvent('keypress', {key: 'Enter'}));
+            }
+        };
+        
+        window.clearSeats = function() {
+            window.selectedSeatsList.forEach(seat => {
+                const seatEl = document.getElementById('seat_' + seat);
+                if (seatEl) seatEl.style.background = '#4CAF50';
+            });
+            window.selectedSeatsList = [];
+            const listEl = document.getElementById('selectedSeats');
+            if (listEl) listEl.textContent = 'None';
+        };
+
+        function processCommand(cmd) {
+            const command = cmd.trim().toUpperCase();
+            let output = '> ' + cmd + '\n\n';
+
+            if (command === 'HELP') {
+                output += 'GALILEO GDS COMMANDS:\n\n';
+                output += 'A[DATE][ROUTE] - Check flights (A15SEPLHRBKK)\n';
+                output += 'N[SEATS][CLASS][LINE] - Book seats (N2J1)\n';
+                output += 'X[NUM] - Cancel sector (X1), XI - Cancel all\n';
+                output += 'SM*[SEG] - Seat map for segment (SM*1)\n';
+                output += '*VL - Display airline locator\n';
+                output += '*HTE - Display ticket numbers\n';
+                output += 'FQ - Quote fare\n';
+                output += '*R - Display PNR\n';
+                output += 'I - Clear screen';
+                return output;
+            }
+
+            if (command.startsWith('X') && command.length > 1) {
+                if (command === 'XI') {
+                    // Cancel entire PNR
+                    pnrSegments = [];
+                    pnrPassengers = [];
+                    quotedFare = null;
+                    pnrCreated = null;
+                    pnrLocator = null;
+                    notepadEntries = [];
+                    ticketingDeadline = null;
+                    ticketsIssued = [];
+                    
+                    output += '** ENTIRE PNR CANCELLED **\n';
+                    output += 'All segments, passengers, and data cleared';
+                    return output;
+                }
+                
+                // Cancel specific sector
+                const sectorNum = parseInt(command.substring(1));
+                if (isNaN(sectorNum) || sectorNum < 1 || sectorNum > pnrSegments.length) {
+                    output += '** INVALID SECTOR NUMBER **';
+                    return output;
+                }
+                
+                if (pnrSegments.length === 0) {
+                    output += '** NO SEGMENTS TO CANCEL **';
+                    return output;
+                }
+                
+                const cancelledSegment = pnrSegments[sectorNum - 1];
+                pnrSegments.splice(sectorNum - 1, 1);
+                
+                output += '** SECTOR ' + sectorNum + ' CANCELLED **\n';
+                output += 'Cancelled: ' + cancelledSegment.flight + ' ' + cancelledSegment.class + ' ' + cancelledSegment.route;
+                
+                // Clear fare if no segments remain
+                if (pnrSegments.length === 0) {
+                    quotedFare = null;
+                    output += '\n** FARE CLEARED - NO SEGMENTS REMAINING **';
+                }
+                
+                return output;
+            }
+
+            if (command === 'I') {
+                updateDisplay('');
+                return '';
+            }
+
+            if (command.startsWith('A') && command.length >= 10) {
+                const dateStr = command.substring(1, 6);
+                const route = command.substring(6, 12);
+                const origin = route.substring(0, 3);
+                const dest = route.substring(3, 6);
+                
+                lastRoute = origin + dest;
+                lastDate = dateStr;
+
+                if (!airports[origin] || !airports[dest]) {
+                    output += '** INVALID AIRPORT CODE **';
+                    return output;
+                }
+
+                const routeCarriers = carriers[origin + dest];
+                if (!routeCarriers) {
+                    output += '** NO CARRIER LOADED FOR THIS ROUTE **';
+                    return output;
+                }
+
+                lastFlightDetails = [];
+                output += formatDate(dateStr) + ' ' + origin + '/' + dest + ' AVAILABILITY:\n\n';
+                
+                routeCarriers.forEach((carrier, index) => {
+                    let classes = [];
+                    if (carrier === 'BR') {
+                        classes = ['J', 'I', 'W', 'Y', 'L', 'Q', 'O', 'B', 'M', 'V', 'S', 'N'];
+                    } else if (carrier === 'QR') {
+                        classes = ['J', 'C', 'D', 'I', 'W', 'S', 'Y', 'B', 'M', 'L', 'V', 'Q', 'N', 'O'];
+                    } else {
+                        classes = ['J', 'C', 'D', 'I', 'W', 'Y', 'B', 'M', 'L', 'V', 'S', 'N'];
+                    }
+                    
+                    let classStr = '';
+                    classes.forEach(cls => {
+                        classStr += cls + Math.floor(Math.random() * 10) + ' ';
+                    });
+
+                    if (carrier === 'QR' && origin + dest === 'LHRBKK') {
+                        output += (index + 1) + ' ' + origin + ' DOH 2010 0550+1  QR003  ' + classStr + '\n';
+                        output += '    A350 OPERATED BY ' + airlines[carrier] + '\n';
+                        output += (index + 1) + ' DOH ' + dest + ' 0835 1930  QR837  ' + classStr + '\n';
+                        output += '    B777 OPERATED BY ' + airlines[carrier] + '\n';
+                        
+                        lastFlightDetails.push({
+                            carrier: carrier,
+                            flightNum: 'QR003/QR837',
+                            depTime: '2010',
+                            arrTime: '1930'
+                        });
+                    } else if (carrier === 'QR' && origin + dest === 'BKKLHR') {
+                        output += (index + 1) + ' ' + origin + ' DOH 2155 0110+1  QR838  ' + classStr + '\n';
+                        output += '    B777 OPERATED BY ' + airlines[carrier] + '\n';
+                        output += (index + 1) + ' DOH ' + dest + ' 0205 0625  QR004  ' + classStr + '\n';
+                        output += '    A350 OPERATED BY ' + airlines[carrier] + '\n';
+                        
+                        lastFlightDetails.push({
+                            carrier: carrier,
+                            flightNum: 'QR838/QR004',
+                            depTime: '2155',
+                            arrTime: '0625'
+                        });
+                    } else {
+                        let flightNum, depTime, arrTime;
+                        
+                        if (carrier === 'BR' && origin + dest === 'LHRBKK') {
+                            flightNum = 'BR025';
+                            depTime = '2130';
+                            arrTime = '1730+1';
+                        } else if (carrier === 'BR' && origin + dest === 'BKKLHR') {
+                            flightNum = 'BR025';
+                            depTime = '1915';
+                            arrTime = '0715+1';
+                        } else {
+                            flightNum = carrier + (100 + Math.floor(Math.random() * 900));
+                            depTime = '1200';
+                            arrTime = '1800';
+                        }
+                        
+                        lastFlightDetails.push({
+                            carrier: carrier,
+                            flightNum: flightNum,
+                            depTime: depTime,
+                            arrTime: arrTime
+                        });
+
+                        output += (index + 1) + ' ' + origin + ' ' + dest + ' ' + depTime + ' ' + arrTime + '  ' + flightNum + '  ' + classStr + '\n';
+                        output += '    B777 OPERATED BY ' + airlines[carrier] + '\n';
+                    }
+                });
+
+                return output;
+            }
+
+            if (command.startsWith('SM*') && /^\d+$/.test(command.substring(3))) {
+                const segmentNum = parseInt(command.substring(3));
+                
+                if (!pnrSegments.length) {
+                    output += '** NO SEGMENTS BOOKED **';
+                    return output;
+                }
+                
+                if (segmentNum < 1 || segmentNum > pnrSegments.length) {
+                    output += '** INVALID SEGMENT NUMBER **';
+                    return output;
+                }
+                
+                const segment = pnrSegments[segmentNum - 1];
+                
+                output += 'SEGMENT ' + segmentNum + ': ' + segment.flight + ' ' + segment.class + ' ' + segment.route + '\n\n';
+                output += 'SEAT MAP - ' + segment.carrier + ' B777 CLASS ' + segment.class + '\n';
+                output += 'Click available seats to select:\n\n';
+                
+                output += '<div style="font-family: monospace; background: #003d7a; padding: 15px;">';
+                output += '<div style="color: white; margin-bottom: 10px;">Selected: <span id="selectedSeats">None</span></div>';
+                
+                const rows = 15;
+                const seatLetters = ['A', 'B', 'C', 'D', 'E', 'F'];
+                
+                for (let row = 20; row < 20 + rows; row++) {
+                    output += '<div style="margin-bottom: 5px; display: flex; align-items: center;">';
+                    output += '<span style="color: white; width: 25px; margin-right: 10px;">' + row + '</span>';
+                    
+                    seatLetters.forEach((letter, index) => {
+                        const seatNumber = row + letter;
+                        const isOccupied = Math.random() < 0.3;
+                        const color = isOccupied ? '#999' : '#4CAF50';
+                        const cursor = isOccupied ? 'default' : 'pointer';
+                        const onclick = isOccupied ? '' : 'onclick="selectSeat(\'' + seatNumber + '\')"';
+                        
+                        output += '<div id="seat_' + seatNumber + '" ' + onclick + ' style="display: inline-block; width: 25px; height: 25px; background: ' + color + '; margin: 0 2px; border-radius: 3px; text-align: center; line-height: 25px; font-size: 11px; color: white; font-weight: bold; cursor: ' + cursor + ';">' + letter + '</div>';
+                        
+                        if (index === 2) {
+                            output += '<div style="display: inline-block; width: 15px;"></div>';
+                        }
+                    });
+                    
+                    output += '</div>';
+                }
+                
+                output += '<div style="margin-top: 15px;">';
+                output += '<button onclick="confirmSeats()" style="background: #4CAF50; color: white; border: none; padding: 8px 16px; border-radius: 3px; cursor: pointer; margin-right: 10px;">CONFIRM</button>';
+                output += '<button onclick="clearSeats()" style="background: #f44336; color: white; border: none; padding: 8px 16px; border-radius: 3px; cursor: pointer;">CLEAR</button>';
+                output += '</div>';
+                output += '</div>';
+                
+                return output;
+            }
+
+            if (command.startsWith('SEATS:')) {
+                const seatNumbers = command.substring(6).split(',');
+                
+                if (!pnrSegments.length) {
+                    output += '** NO SEGMENTS BOOKED **';
+                    return output;
+                }
+                
+                const latestSegment = pnrSegments[pnrSegments.length - 1];
+                if (!latestSegment.seats) latestSegment.seats = [];
+                
+                seatNumbers.forEach(seat => {
+                    if (!latestSegment.seats.includes(seat.trim())) {
+                        latestSegment.seats.push(seat.trim());
+                    }
+                });
+                
+                output += '** SEATS ASSIGNED **\n';
+                output += 'FLIGHT: ' + latestSegment.flight + '\n';
+                output += 'SEATS: ' + latestSegment.seats.join(', ');
+                
+                return output;
+            }
+
+            if (command === 'TKP') {
+                if (!quotedFare || !pnrPassengers.filter(p => p).length) {
+                    output += '** MISSING FARE OR PASSENGER NAMES **';
+                    return output;
+                }
+
+                ticketsIssued = [];
+                pnrSegments.forEach((segment, index) => {
+                    const ticketNumber = segment.carrier + randomString(10, '0123456789');
+                    const passengerCount = segment.passengers || 1;
+                    
+                    for (let i = 0; i < passengerCount; i++) {
+                        ticketsIssued.push({
+                            ticketNumber: ticketNumber + (i > 0 ? '-' + (i + 1) : ''),
+                            segment: index + 1,
+                            flight: segment.flight,
+                            route: segment.route,
+                            class: segment.class
+                        });
+                    }
+                });
+
+                output += '** TICKETS ISSUED **\n\n';
+                pnrPassengers.filter(p => p).forEach((passenger, index) => {
+                    output += 'PASSENGER ' + (index + 1) + ': ' + passenger + '\n';
+                });
+                output += 'PNR: ' + (pnrLocator || 'PENDING') + '\n\n';
+
+                ticketsIssued.forEach((ticket, index) => {
+                    output += 'TICKET ' + (index + 1) + ': ' + ticket.ticketNumber + '\n';
+                    output += 'FLIGHT: ' + ticket.flight + ' ' + ticket.class + ' ' + ticket.route + '\n\n';
+                });
+
+                output += 'TOTAL AMOUNT: ' + quotedFare.total + '.00 ' + quotedFare.currency;
+                return output;
+            }
+
+            if (command.startsWith('NP.')) {
+                const noteText = command.substring(3);
+                notepadEntries.push(noteText);
+                output += 'NOTEPAD ENTRY ADDED: ' + noteText;
+                return output;
+            }
+
+            if (command.startsWith('T.T*')) {
+                const deadline = command.substring(4);
+                ticketingDeadline = deadline;
+                output += 'TICKETING DEADLINE SET: ' + deadline;
+                return output;
+            }
+
+            if (command === 'ER') {
+                if (!pnrLocator) pnrLocator = randomString(6);
+                if (!pnrCreated) pnrCreated = new Date();
+                
+                output += '** PNR ' + pnrLocator + ' SAVED **\n';
+                output += 'USE *' + pnrLocator + ' TO RETRIEVE THIS PNR';
+                return output;
+            }
+
+            if (command.startsWith('R.')) {
+                const receivedFrom = command.substring(2);
+                output += 'RECEIVED FROM: ' + receivedFrom;
+                return output;
+            }
+
+            if (command.startsWith('P.*')) {
+                const phoneNumber = command.substring(3);
+                output += 'PHONE NUMBER RECORDED: ' + phoneNumber;
+                return output;
+            }
+
+            if (command.startsWith('N') && command.includes('.')) {
+                const match = command.match(/^N(\d+)\.(.+)$/);
+                if (match) {
+                    const passengerNum = parseInt(match[1]);
+                    const passengerName = match[2];
+                    
+                    while (pnrPassengers.length < passengerNum) {
+                        pnrPassengers.push(null);
+                    }
+                    
+                    pnrPassengers[passengerNum - 1] = passengerName;
+                    output += 'PASSENGER ' + passengerNum + ' NAME ACCEPTED: ' + passengerName;
+                    return output;
+                }
+            }
+
+            if (command.startsWith('N') && command.length >= 2 && !command.includes('.')) {
+                let remainingCmd = command.substring(1);
+                let numPassengers = 1;
+                let bookingClass = 'Y';
+                let lineNum = 1;
+                
+                const numberMatch = remainingCmd.match(/^(\d+)/);
+                if (numberMatch) {
+                    numPassengers = parseInt(numberMatch[1]);
+                    remainingCmd = remainingCmd.substring(numberMatch[1].length);
+                }
+                
+                const classMatch = remainingCmd.match(/^([A-Z]+)/);
+                if (classMatch) {
+                    bookingClass = classMatch[1];
+                    remainingCmd = remainingCmd.substring(classMatch[1].length);
+                }
+                
+                const lineMatch = remainingCmd.match(/^(\d+)/);
+                if (lineMatch) {
+                    lineNum = parseInt(lineMatch[1]);
+                }
+
+                if (!lastRoute || lastFlightDetails.length === 0) {
+                    output += '** NO AVAILABILITY DISPLAYED **';
+                    return output;
+                }
+
+                const flightDetail = lastFlightDetails[lineNum - 1];
+                
+                if (!pnrCreated) {
+                    pnrCreated = new Date();
+                    pnrLocator = randomString(6);
+                }
+
+                const segment = {
+                    flight: flightDetail.flightNum,
+                    class: bookingClass,
+                    date: lastDate,
+                    route: lastRoute,
+                    status: 'HK' + numPassengers,
+                    dep_time: flightDetail.depTime,
+                    arr_time: flightDetail.arrTime,
+                    dow: getDayOfWeek(lastDate),
+                    carrier: flightDetail.carrier,
+                    passengers: numPassengers
+                };
+
+                pnrSegments.push(segment);
+                output += 'SEGMENT SOLD: ' + flightDetail.flightNum + ' ' + bookingClass + ' ' + formatDate(lastDate) + ' ' + lastRoute + ' HK' + numPassengers;
+                return output;
+            }
+
+            if (command === 'FQ') {
+                if (!pnrSegments.length) {
+                    output += '** NO SEGMENTS TO PRICE **';
+                    return output;
+                }
+
+                const segment = pnrSegments[0];
+                const fareList = fares[segment.route] && fares[segment.route][segment.carrier];
+                const fare = fareList && fareList.find(f => f.class === segment.class);
+
+                if (!fare) {
+                    output += '** FARE NOT LOADED FOR THIS CLASS **';
+                    return output;
+                }
+
+                const isOneWay = pnrSegments.length === 1;
+                let fareAmount = fare.total;
+                
+                if ((segment.carrier === 'BR' || segment.carrier === 'QR') && isOneWay && fare.oneway) {
+                    fareAmount = fare.oneway;
+                }
+                
+                const totalAmount = fareAmount * segment.passengers;
+                quotedFare = { ...fare, total: totalAmount, passengers: segment.passengers };
+
+                output += 'FARE QUOTED FOR ' + segment.route + ':\n';
+                output += 'CLASS: ' + segment.class + ' (' + fare.description + ')\n';
+                if ((segment.carrier === 'BR' || segment.carrier === 'QR') && isOneWay) {
+                    output += 'ONE-WAY FARE: ' + fareAmount + '.00 ' + fare.currency + '\n';
+                }
+                output += 'TOTAL: ' + totalAmount + '.00 ' + fare.currency;
+                return output;
+            }
+
+            if (command === '*VL') {
+                if (!pnrLocator) {
+                    output += '** NO PNR LOCATOR ASSIGNED **';
+                    return output;
+                }
+                
+                output += '** AIRLINE LOCATOR **\n';
+                output += 'PNR LOCATOR: ' + pnrLocator + '\n';
+                output += 'CREATED: ' + (pnrCreated ? pnrCreated.toLocaleDateString('en-GB', {day: '2-digit', month: 'short'}).replace(' ', '').toUpperCase() : '29JUN');
+                return output;
+            }
+
+            if (command === '*HTE') {
+                if (!ticketsIssued.length) {
+                    output += '** NO TICKETS ISSUED **\n';
+                    output += 'Use TKP command to issue tickets first';
+                    return output;
+                }
+
+                output += '** ELECTRONIC TICKET NUMBERS **\n\n';
+                
+                pnrPassengers.filter(p => p !== null).forEach((passenger, index) => {
+                    output += 'PASSENGER ' + (index + 1) + ': ' + passenger + '\n';
+                });
+                
+                output += 'PNR LOCATOR: ' + (pnrLocator || 'PENDING') + '\n';
+                output += 'ISSUED: ' + new Date().toLocaleDateString('en-GB', {day: '2-digit', month: 'short', year: 'numeric'}).replace(/\s/g, '').toUpperCase() + '\n\n';
+
+                ticketsIssued.forEach((ticket, index) => {
+                    const eTicketNumber = randomString(13, '0123456789');
+                    
+                    output += 'E-TICKET ' + (index + 1) + ':\n';
+                    output += 'TICKET NUMBER: ' + ticket.ticketNumber + '\n';
+                    output += 'E-TICKET NUMBER: ' + eTicketNumber + '\n';
+                    output += 'FLIGHT: ' + ticket.flight + ' CLASS: ' + ticket.class + '\n';
+                    output += 'ROUTE: ' + ticket.route + '\n';
+                    output += 'STATUS: ISSUED\n\n';
+                });
+
+                output += 'TOTAL TICKETS: ' + ticketsIssued.length + '\n';
+                output += 'ELECTRONIC TICKETING CONFIRMED';
+                return output;
+            }
+
+            if (command === '*R') {
+                const locator = pnrLocator || 'XXXXXX';
+                const created = pnrCreated ? pnrCreated.toLocaleDateString('en-GB', {day: '2-digit', month: 'short'}).replace(' ', '').toUpperCase() : '29JUN';
+                
+                output += locator + '/71  LONUK  ' + created + '\n';
+
+                const namedPassengers = pnrPassengers.filter(p => p !== null && p !== undefined);
+                if (namedPassengers.length > 0) {
+                    namedPassengers.forEach((passenger, index) => {
+                        if (index > 0) output += '  ';
+                        output += (index + 1) + '.' + passenger;
+                    });
+                    output += '\n';
+                }
+
+                pnrSegments.forEach((segment, index) => {
+                    let segmentLine = (index + 1) + '. ' + segment.flight + ' ' + segment.class + ' ' + formatDate(segment.date) + ' ' + segment.route + ' ' + segment.status + ' ' + segment.dep_time + ' ' + segment.arr_time + ' ' + segment.dow;
+                    if (segment.seats && segment.seats.length) {
+                        segmentLine += ' SEATS:' + segment.seats.join(',');
+                    }
+                    output += segmentLine + '\n';
+                });
+
+                if (quotedFare) {
+                    output += '\nFARE: ' + quotedFare.total + '.00 ' + quotedFare.currency;
+                }
+
+                if (ticketingDeadline) {
+                    output += '\nTICKETING: ' + ticketingDeadline;
+                }
+
+                if (notepadEntries.length > 0) {
+                    output += '\n\nNOTEPAD:\n';
+                    notepadEntries.forEach((note, index) => {
+                        output += (index + 1) + '. ' + note + '\n';
+                    });
+                }
+
+                if (ticketsIssued.length > 0) {
+                    output += '\nTICKETS ISSUED:\n';
+                    ticketsIssued.forEach((ticket, index) => {
+                        output += (index + 1) + '. ' + ticket.ticketNumber + ' - ' + ticket.flight + ' ' + ticket.class + '\n';
+                    });
+                }
+
+                return output;
+            }
+
+            output += '** COMMAND NOT RECOGNISED **';
+            return output;
+        }
+
+        input.addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                const command = input.value.trim();
+                if (command) {
+                    try {
+                        const result = processCommand(command);
+                        if (result) {
+                            updateDisplay(result);
+                        }
+                    } catch (error) {
+                        updateDisplay('ERROR: ' + error.message);
+                    }
+                    input.value = '';
+                }
+            }
+        });
+
+        document.addEventListener('click', function() {
+            input.focus();
+        });
+
+        updateDisplay('');
+        input.focus();
+    </script>
+</body>
+</html>
